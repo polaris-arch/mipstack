@@ -4190,10 +4190,11 @@ type TCPConn struct {
 	abortMu  sync.Mutex
 	abortErr error
 
-	mu          sync.Mutex
-	readBuffer  tcpReadBuffer
-	readErr     error
-	terminalErr error
+	mu                 sync.Mutex
+	readBuffer         tcpReadBuffer
+	readErr            error
+	terminalErr        error
+	closeCancellations *tcpCloseCancellation
 	// pending remains nil until asynchronous errors or live Info callers need
 	// actor delivery.
 	pending       *tcpPendingEvents
@@ -6174,7 +6175,9 @@ func (c *TCPConn) Close() error {
 	}
 	c.notifySendChangedLocked()
 	c.notifyReadLocked()
+	cancellations := c.takeCloseCancellationsLocked()
 	c.mu.Unlock()
+	runTCPCloseCancellations(cancellations)
 	if abortive {
 		c.abort(net.ErrClosed)
 		return nil
@@ -6985,6 +6988,7 @@ func (c *TCPConn) finish(err error) {
 	c.pending = nil
 	c.notifyReadLocked()
 	c.notifySendChangedLocked()
+	cancellations := c.takeCloseCancellationsLocked()
 	c.mu.Unlock()
 	// Close the actor queue before publishing its terminal snapshot. The
 	// connection remains visible in Stack.tcp until run's deferred removal, so
@@ -7009,6 +7013,7 @@ func (c *TCPConn) finish(err error) {
 		base.LastError = err
 		c.lastInfo.Store(&base)
 	}
+	runTCPCloseCancellations(cancellations)
 }
 
 // run owns the connection protocol state from SYN through termination.

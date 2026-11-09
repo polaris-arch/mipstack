@@ -11672,7 +11672,8 @@ func TestTCPConnectionMemoryLayout(t *testing.T) {
 		got  uintptr
 		want uintptr
 	}{
-		{"TCPConn", unsafe.Sizeof(TCPConn{}), 688},
+		// One optional cancellation-list pointer; benchmark allocator cost too.
+		{"TCPConn", unsafe.Sizeof(TCPConn{}), 696},
 		{"socketDeadline", unsafe.Sizeof(socketDeadline{}), 16},
 		// BenchmarkTCPEstablishedStateAllocation measures the effective heap
 		// cost, including any runtime header, separately from this layout check.
