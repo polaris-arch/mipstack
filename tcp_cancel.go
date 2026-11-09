@@ -3,9 +3,8 @@ package mipstack
 import "context"
 
 type tcpCloseCancellation struct {
-	cancel  context.CancelFunc
-	next    *tcpCloseCancellation
-	claimed bool
+	cancel context.CancelFunc
+	next   *tcpCloseCancellation
 }
 
 // CancelOnClose arranges to call cancel when application access is fully closed
@@ -35,9 +34,7 @@ func (c *TCPConn) CancelOnClose(cancel context.CancelFunc) (stop func() bool) {
 	return func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if registration.claimed || registration.cancel == nil || c.userClosed || c.terminalErr != nil {
-			return false
-		}
+
 		for link := &c.closeCancellations; *link != nil; link = &(*link).next {
 			if *link == registration {
 				*link = registration.next
@@ -54,9 +51,7 @@ func (c *TCPConn) CancelOnClose(cancel context.CancelFunc) (stop func() bool) {
 func (c *TCPConn) takeCloseCancellationsLocked() *tcpCloseCancellation {
 	registrations := c.closeCancellations
 	c.closeCancellations = nil
-	for registration := registrations; registration != nil; registration = registration.next {
-		registration.claimed = true
-	}
+
 	return registrations
 }
 
@@ -64,7 +59,7 @@ func runTCPCloseCancellations(registration *tcpCloseCancellation) {
 	for registration != nil {
 		next := registration.next
 		registration.cancel()
-		// Claimed registrations cannot be changed by stop; retire references.
+		// Detached registrations are no longer reachable by stop.
 		registration.cancel = nil
 		registration.next = nil
 		registration = next
