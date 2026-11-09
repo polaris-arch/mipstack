@@ -34,7 +34,8 @@ func (c *TCPConn) CancelOnClose(cancel context.CancelFunc) (stop func() bool) {
 	return func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
-
+		// Close and finish detach registrations under mu before callbacks run.
+		// Only removal from the active list can win ownership.
 		for link := &c.closeCancellations; *link != nil; link = &(*link).next {
 			if *link == registration {
 				*link = registration.next
@@ -51,7 +52,6 @@ func (c *TCPConn) CancelOnClose(cancel context.CancelFunc) (stop func() bool) {
 func (c *TCPConn) takeCloseCancellationsLocked() *tcpCloseCancellation {
 	registrations := c.closeCancellations
 	c.closeCancellations = nil
-
 	return registrations
 }
 
