@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -121,6 +122,67 @@ func TestTCPCancelOnCloseHalfCloseAndDeadlines(t *testing.T) {
 	}
 	if err := connection.Close(); err != nil || ctx.Err() == nil {
 		t.Fatalf("full close did not cancel: %v, %v", err, ctx.Err())
+	}
+}
+
+// Both endpoints run the real stack. A peer FIN completes reads, not the
+// connection lifetime: a registered preparation must still be able to respond.
+func TestTCPCancelOnClosePeerFINKeepsResponse(t *testing.T) {
+	clientAddress := netip.MustParseAddr("192.0.2.10")
+	serverAddress := netip.MustParseAddr("192.0.2.20")
+	client := newForwarderTestStack(t, clientAddress, false)
+	server := newForwarderTestStack(t, serverAddress, false)
+	newStackBridge(t, client, server)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	listener, err := server.ListenTCP(ctx, "tcp4", netip.AddrPortFrom(serverAddress, 8080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	_ = listener.(*TCPListener).SetDeadline(time.Now().Add(2 * time.Second))
+	peer, err := client.DialTCP(ctx, "tcp4", netip.AddrPort{}, netip.AddrPortFrom(serverAddress, 8080))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	accepted, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := accepted.(*TCPConn)
+	defer connection.Close()
+	_ = peer.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	var calls atomic.Int32
+	stop := connection.CancelOnClose(func() { calls.Add(1) })
+	defer stop()
+	if _, err = peer.Write([]byte("request")); err != nil {
+		t.Fatal(err)
+	}
+	if err = peer.(*TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	request, err := io.ReadAll(connection)
+	if err != nil || string(request) != "request" {
+		t.Fatalf("request before peer FIN = %q, %v", request, err)
+	}
+	_ = connection.Info() // Actor barrier after the FIN, not a sleep-based check.
+	if calls.Load() != 0 {
+		t.Fatal("peer FIN canceled a live registration")
+	}
+	if _, err = connection.Write([]byte("response")); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, len("response"))
+	if _, err = io.ReadFull(peer, response); err != nil || string(response) != "response" {
+		t.Fatalf("response after peer FIN = %q, %v", response, err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("response direction canceled before full closure")
+	}
+	if err = connection.Close(); err != nil || calls.Load() != 1 {
+		t.Fatalf("full close = %v, cancellation calls = %d", err, calls.Load())
 	}
 }
 
